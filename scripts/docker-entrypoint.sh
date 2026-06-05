@@ -1,5 +1,5 @@
 #!/bin/bash
-# scripts/docker-entrypoint.sh - Script completo con todas las tablas
+# scripts/docker-entrypoint.sh
 
 set -e
 
@@ -746,7 +746,7 @@ if [ "$CAMILA_COUNT" -eq "0" ]; then
         if [ "$RESULTADO_COUNT" -gt "0" ]; then
             echo "🚀 Iniciando carga masiva de datos de Camila..."
             # Se asume participación 68 y año 2022 como defaults para la carga inicial
-            python scripts/load_camila_data_complete.py --anio 2022 --participacion 68
+            python scripts/load_camila_data.py --anio 2022 --participacion 68
             echo "✅ Proceso de carga de Camila completado!"
         fi
     fi

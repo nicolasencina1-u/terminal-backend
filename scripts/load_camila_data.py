@@ -1,18 +1,18 @@
-# scripts/load_camila_data_complete.py
+# scripts/load_camila_data.py
 
 """
 Ejemplos de uso:  
   # Cargar una semana específica
-  python load_camila_data_complete.py --semana 2022-01-03 --participacion 68
+  python load_camila_data.py --semana 2022-01-03 --participacion 68
   
   # Cargar múltiples semanas
-  python load_camila_data_complete.py --semanas 2022-01-03 2022-01-10 2022-01-17 --participacion 68
+  python load_camila_data.py --semanas 2022-01-03 2022-01-10 2022-01-17 --participacion 68
   
   # Cargar todas las semanas de un año
-  python load_camila_data_complete.py --anio 2022 --participacion 68
+  python load_camila_data.py --anio 2022 --participacion 68
   
   # Cargar rango de años
-  python load_camila_data_complete.py --anios 2021 2022 2023 --participacion 70
+  python load_camila_data.py --anios 2021 2022 2023 --participacion 70
 """
 
 import asyncio
@@ -259,19 +259,19 @@ async def load_camila_data():
         epilog="""
 Ejemplos de uso:
   # Cargar año con variante
-  python load_camila_data_complete.py --anio 2022 --participacion 68 --variant pipeline
+  python load_camila_data.py --anio 2022 --participacion 68 --variant pipeline
 
   # Cargar una semana específica
-  python load_camila_data_complete.py --semana 2022-01-03 --participacion 68
+  python load_camila_data.py --semana 2022-01-03 --participacion 68
   
   # Cargar múltiples semanas
-  python load_camila_data_complete.py --semanas 2022-01-03 2022-01-10 2022-01-17 --participacion 68
+  python load_camila_data.py --semanas 2022-01-03 2022-01-10 2022-01-17 --participacion 68
   
   # Cargar todas las semanas de un año
-  python load_camila_data_complete.py --anio 2022 --participacion 68
+  python load_camila_data.py --anio 2022 --participacion 68
   
   # Cargar rango de años
-  python load_camila_data_complete.py --anios 2021 2022 2023 --participacion 70
+  python load_camila_data.py --anios 2021 2022 2023 --participacion 70
         """
     )
     

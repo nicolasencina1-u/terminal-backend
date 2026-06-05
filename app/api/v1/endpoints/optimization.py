@@ -1,6 +1,6 @@
 
 from typing import List, Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, func, distinct, text
@@ -10,11 +10,14 @@ import shutil
 import os
 import numpy as np
 from app.core.database import get_db
+from app.models.movement_flow import MovementFlow
+from app.models.historical_movements import HistoricalMovement
 from app.models.optimization import (
     Instancia, Bloque, Segregacion, MovimientoReal,
     MovimientoModelo, DistanciaReal, ResultadoGeneral,
     AsignacionBloque, CargaTrabajo, OcupacionBloque,
-    KPIComparativo, MetricaTemporal, LogProcesamiento
+    KPIComparativo, MetricaTemporal, LogProcesamiento,
+    TipoMovimiento
 )
 from app.services.optimization_loader import OptimizationLoader
 import logging
@@ -22,6 +25,24 @@ from uuid import UUID
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+def get_turno_from_hour(hour: int) -> int:
+    """Determina el turno basado en la hora (1: 8-16h, 2: 16-24h, 3: 0-8h)"""
+    if 8 <= hour < 16:
+        return 1
+    elif 16 <= hour < 24:
+        return 2
+    else:
+        return 3
+
+def get_periodo_from_datetime(dt: datetime) -> int:
+    """
+    Calcula el período (1-21) basado en el día de la semana y turno
+    Lunes = 0, Domingo = 6 en Python weekday()
+    """
+    weekday = dt.weekday()  
+    turno = get_turno_from_hour(dt.hour)
+    return weekday * 3 + turno
 
 async def get_real_movimientos_stats(db: AsyncSession, escenario_id: UUID) -> Dict[str, Any]:
     """Obtiene estadísticas de movimientos reales vinculados al escenario"""
@@ -53,7 +74,7 @@ async def get_optimization_dashboard(
     granularidad: Optional[str] = Query(None, description="bahia o pila"),
     db: AsyncSession = Depends(get_db)
 ):
-    """Obtener dashboard completo con KPIs de optimización - VERSIÓN CORREGIDA"""
+    """Obtener dashboard completo con KPIs de optimización"""
     
     if variant == 'econstraint': variant = 'e-constraint'
     con_dispersion = dispersion == 'K'
@@ -130,6 +151,107 @@ async def get_optimization_dashboard(
         ).order_by(MetricaTemporal.periodo)
     )
     metricas_temporales = temporal_query.scalars().all()
+
+    movs_detalle_query = await db.execute(
+        select(
+            Bloque.codigo,
+            MovimientoModelo.periodo,
+            func.sum(MovimientoModelo.recepcion).label('recepcion'),
+            func.sum(MovimientoModelo.carga).label('carga'),
+            func.sum(MovimientoModelo.descarga).label('descarga'),
+            func.sum(MovimientoModelo.entrega).label('entrega')
+        ).join(Bloque).where(
+            MovimientoModelo.instancia_id == instancia.id
+        ).group_by(Bloque.codigo, MovimientoModelo.periodo)
+    )
+    movs_detalle_rows = movs_detalle_query.all()
+    
+    # Organizar detalle por periodo para fácil acceso
+    detalle_por_periodo = {}
+    for row in movs_detalle_rows:
+        if row.periodo not in detalle_por_periodo:
+            detalle_por_periodo[row.periodo] = {}
+        detalle_por_periodo[row.periodo][row.codigo] = {
+            'recepcion': int(row.recepcion or 0),
+            'carga': int(row.carga or 0),
+            'descarga': int(row.descarga or 0),
+            'entrega': int(row.entrega or 0),
+            'total': int((row.recepcion or 0) + (row.carga or 0) + (row.descarga or 0) + (row.entrega or 0))
+        }
+
+    # OBTENER BASELINE HISTÓRICO REAL desde HistoricalMovement
+    # Esta tabla contiene registros horarios por bloque con los totales reales
+    hist_query = await db.execute(
+        select(HistoricalMovement).where(
+            and_(
+                HistoricalMovement.hora >= instancia.fecha_inicio,
+                HistoricalMovement.hora < (instancia.fecha_fin + timedelta(days=1))
+            )
+        )
+    )
+    hist_rows = hist_query.scalars().all()
+    
+    # Mapeo de capacidades HISTÓRICAS (Sincronizado con historical.py para consistencia)
+    # Todos los bloques de Costanera (C1-C9) usan 1008 TEUs en la vista histórica
+    HIST_CAPACIDADES = {
+        'C1': 1008, 'C2': 1008, 'C3': 1008, 'C4': 1008, 'C5': 1008,
+        'C6': 1008, 'C7': 1008, 'C8': 1008, 'C9': 1008
+    }
+    
+    real_detalle_por_periodo = {} # {periodo: {bloque_norm: stats}}
+    real_ocup_bloque_semanal = {} # {bloque_norm: [ocupaciones_horarias]}
+    
+    for row in hist_rows:
+        p = get_periodo_from_datetime(row.hora)
+        # NORMALIZACIÓN CRÍTICA: C1-A -> C1
+        b_norm = str(row.bloque).strip().upper()[:2]
+        if not b_norm.startswith('C'): continue 
+        
+        # 1. Detalle por periodo
+        if p not in real_detalle_por_periodo: real_detalle_por_periodo[p] = {}
+        if b_norm not in real_detalle_por_periodo[p]:
+            real_detalle_por_periodo[p][b_norm] = {
+                'recepcion': 0, 'carga': 0, 'descarga': 0, 'entrega': 0, 
+                'yard': 0, 'total': 0, 'ocupacion_list': []
+            }
+        
+        stats = real_detalle_por_periodo[p][b_norm]
+        stats['recepcion'] += int(row.gate_entrada_contenedores or 0)
+        stats['entrega'] += int(row.gate_salida_contenedores or 0)
+        stats['descarga'] += int(row.muelle_entrada_contenedores or 0)
+        stats['carga'] += int(row.muelle_salida_contenedores or 0)
+        stats['yard'] += int(row.remanejos_contenedores or 0)
+        stats['total'] += int((row.gate_entrada_contenedores or 0) + (row.gate_salida_contenedores or 0) + 
+                             (row.muelle_entrada_contenedores or 0) + (row.muelle_salida_contenedores or 0) + 
+                             (row.remanejos_contenedores or 0))
+        stats['ocupacion_list'].append(float(row.promedio_teus or 0))
+        
+        # 2. Datos para promedio semanal
+        if b_norm not in real_ocup_bloque_semanal: real_ocup_bloque_semanal[b_norm] = []
+        real_ocup_bloque_semanal[b_norm].append(float(row.promedio_teus or 0))
+
+    # Calcular promedios reales y mapear ocupación final
+    real_ocup_periodo_avg = {}
+    for p, bloques in real_detalle_por_periodo.items():
+        bloque_pcts = []
+        for b_id, s in bloques.items():
+            teus_avg = float(np.mean(s['ocupacion_list'])) if s['ocupacion_list'] else 0
+            # USAR CAPACIDAD HISTÓRICA PARA EL BASELINE
+            cap = HIST_CAPACIDADES.get(b_id, 1008)
+            s['ocupacion_avg'] = (teus_avg / cap * 100) if cap > 0 else 0
+            bloque_pcts.append(s['ocupacion_avg'])
+            del s['ocupacion_list'] # Liberar memoria
+            
+        real_ocup_periodo_avg[p] = float(np.mean(bloque_pcts)) if bloque_pcts else 0
+
+    # Totales reales por bloque para la semana (Suma 21 periodos)
+    movs_real_semanal = {}
+    for p, bloques in real_detalle_por_periodo.items():
+        for b_id, s in bloques.items():
+            if b_id not in movs_real_semanal:
+                movs_real_semanal[b_id] = {'recepcion': 0, 'carga': 0, 'descarga': 0, 'entrega': 0, 'yard': 0, 'total': 0}
+            for k in ['recepcion', 'carga', 'descarga', 'entrega', 'yard', 'total']:
+                movs_real_semanal[b_id][k] += s[k]
     
     # Obtener segregaciones activas del modelo (las que realmente se optimizaron)
     segregaciones_query = await db.execute(
@@ -164,15 +286,30 @@ async def get_optimization_dashboard(
     asignaciones = asignaciones_query.scalars().all()
     asignaciones_dict = {a.segregacion_id: a for a in asignaciones}
     
-    # CORRECCIÓN: Calcular eficiencia correctamente
     eficiencia_real = float(resultados.eficiencia_real or 0)
     eficiencia_modelo = float(resultados.eficiencia_modelo or 100)
     eficiencia_ganancia = eficiencia_modelo - eficiencia_real  # Diferencia en puntos porcentuales
     
-    # CORRECCIÓN: Usar movimientos del modelo correctos
     movimientos_optimizados = resultados.movimientos_optimizados
     
-    # Construir respuesta CORREGIDA
+    # Totales del modelo por bloque para la semana (Suma 21 periodos)
+    movs_modelo_semanal = {}
+    for p, bloques in detalle_por_periodo.items():
+        for b, stats in bloques.items():
+            if b not in movs_modelo_semanal:
+                movs_modelo_semanal[b] = {'recepcion': 0, 'carga': 0, 'descarga': 0, 'entrega': 0, 'total': 0}
+            for k in movs_modelo_semanal[b]:
+                movs_modelo_semanal[b][k] += stats[k]
+
+    # Totales reales por bloque para la semana (Suma 21 periodos)
+    movs_real_semanal = {}
+    for p, bloques in real_detalle_por_periodo.items():
+        for b, stats in bloques.items():
+            if b not in movs_real_semanal:
+                movs_real_semanal[b] = {'recepcion': 0, 'carga': 0, 'descarga': 0, 'entrega': 0, 'yard': 0, 'total': 0}
+            for k in movs_real_semanal[b]:
+                movs_real_semanal[b][k] += stats[k]
+
     response = {
         'metadata': {
             'instancia_id': str(instancia.id),
@@ -191,14 +328,14 @@ async def get_optimization_dashboard(
             'eficiencia': {
                 'real': eficiencia_real,
                 'optimizada': eficiencia_modelo,
-                'ganancia': eficiencia_ganancia  # CORREGIDO: puntos porcentuales
+                'ganancia': eficiencia_ganancia
             },
             'movimientos': {
                 'total_real': resultados.movimientos_reales_total,
                 'operativos_real': resultados.movimientos_reales_total - resultados.movimientos_yard_real,
                 'operativos_modelo': movimientos_optimizados,
                 'yard_eliminados': resultados.movimientos_yard_real,
-                'optimizados': movimientos_optimizados,  # CORREGIDO
+                'optimizados': movimientos_optimizados,
                 'reduccion_absoluta': resultados.movimientos_reduccion,
                 'reduccion_porcentaje': float(resultados.movimientos_reduccion_pct or 0),
                 'detalle': {
@@ -223,8 +360,8 @@ async def get_optimization_dashboard(
                 'distancia_ahorrada': resultados.distancia_reduccion
             },
             'segregaciones': {
-                'total': len(segregaciones_activas),  # CORREGIDO: segregaciones del modelo
-                'optimizadas': segregaciones_mapeadas_count,  # CORREGIDO: segregaciones realmente mapeadas
+                'total': len(segregaciones_activas),
+                'optimizadas': segregaciones_mapeadas_count,
                 'porcentaje': (segregaciones_mapeadas_count / len(segregaciones_activas) * 100) 
                              if len(segregaciones_activas) > 0 else 0
             },
@@ -235,7 +372,7 @@ async def get_optimization_dashboard(
                 'capacidad_total': resultados.capacidad_total_teus
             },
             'carga_trabajo': {
-                'total': movimientos_optimizados,  # CORREGIDO: usar movimientos, no carga_trabajo_total
+                'total': movimientos_optimizados,
                 'maxima': resultados.carga_maxima,
                 'minima': resultados.carga_minima,
                 'variacion': resultados.variacion_carga,
@@ -251,7 +388,14 @@ async def get_optimization_dashboard(
                 'ocupacion_maxima': float(bloque.ocupacion_maxima or 0),
                 'ocupacion_minima': float(bloque.ocupacion_minima or 0),
                 'teus_promedio': float(bloque.teus_promedio or 0),
-                'utilizacion': float(bloque.teus_promedio / bloque.capacidad_teus * 100) if bloque.capacidad_teus > 0 else 0
+                'utilizacion': float(bloque.teus_promedio / bloque.capacidad_teus * 100) if bloque.capacidad_teus > 0 else 0,
+                'movimientos': movs_modelo_semanal.get(bloque.codigo, {
+                    'recepcion': 0, 'carga': 0, 'descarga': 0, 'entrega': 0, 'total': 0
+                }),
+                'movimientos_real': movs_real_semanal.get(bloque.codigo, {
+                    'recepcion': 0, 'carga': 0, 'descarga': 0, 'entrega': 0, 'yard': 0, 'total': 0
+                }),
+                'ocupacion_real': float(np.mean(real_ocup_bloque_semanal.get(bloque.codigo, [0]))) / HIST_CAPACIDADES.get(bloque.codigo, 1008) * 100
             }
             for bloque in ocupacion_bloques
         ],
@@ -264,7 +408,11 @@ async def get_optimization_dashboard(
                 'movimientos_yard': m.movimientos_yard_real,
                 'movimientos_modelo': m.movimientos_modelo,
                 'carga_trabajo': m.carga_trabajo,
-                'ocupacion_promedio': float(m.ocupacion_promedio or 0)
+                'ocupacion_promedio': float(m.ocupacion_promedio or 0),
+                'ocupacion_promedio_real': real_ocup_periodo_avg.get(m.periodo, 0),
+                'detalle_bloques': detalle_por_periodo.get(m.periodo, {}),
+                'detalle_bloques_real': real_detalle_por_periodo.get(m.periodo, {}),
+                'detalle_ocupacion_real': {b: s.get('ocupacion_avg', 0) for b, s in real_detalle_por_periodo.get(m.periodo, {}).items()}
             }
             for m in metricas_temporales
         ],
@@ -289,7 +437,7 @@ async def get_optimization_dashboard(
                 'porcentaje': float(resultados.movimientos_reduccion_pct or 0)
             },
             'mejora_eficiencia': {
-                'valor': eficiencia_ganancia,  # CORREGIDO
+                'valor': eficiencia_ganancia,
                 'unidad': 'puntos porcentuales'
             },
             'ahorro_distancia': {
@@ -324,7 +472,7 @@ async def get_metrics_with_block_detail(
     turno: Optional[int] = Query(None, ge=1, le=21),
     db: AsyncSession = Depends(get_db)
 ):
-    """Obtiene métricas con detalle de movimientos por bloque - NUEVO ENDPOINT"""
+    """Obtiene métricas con detalle de movimientos por bloque"""
     
     # Verificar que existe la instancia
     instancia = await db.get(Instancia, instancia_id)
@@ -687,7 +835,7 @@ async def get_dashboard_temporal(
     cargas = [c.carga_total for c in cargas_trabajo]
     balance_carga = int(np.std(cargas)) if cargas else 0
     
-    # Calcular eficiencia correctamente
+    # Calcular eficiencia
     eficiencia_real = ((movimientos_operativos_real - total_yard) / movimientos_operativos_real * 100) if movimientos_operativos_real > 0 else 0
     reduccion_operativos = movimientos_operativos_real - movimientos_operativos_modelo
     porcentaje_reduccion = (reduccion_operativos / movimientos_operativos_real * 100) if movimientos_operativos_real > 0 else 0
@@ -789,7 +937,7 @@ async def get_analisis_segregaciones(
     top_n: int = Query(20, le=50),
     db: AsyncSession = Depends(get_db)
 ):
-    """Análisis detallado de segregaciones para una instancia - MEJORADO"""
+    """Análisis detallado de segregaciones para una instancia"""
     
     # Verificar instancia
     instancia = await db.get(Instancia, instancia_id)
@@ -898,7 +1046,7 @@ async def get_analisis_bloques(
     periodo: Optional[int] = Query(None, ge=1, le=21),
     db: AsyncSession = Depends(get_db)
 ):
-    """Análisis detallado de utilización de bloques - VERSIÓN MEJORADA"""
+    """Análisis detallado de utilización de bloques"""
     
     # Verificar instancia
     instancia = await db.get(Instancia, instancia_id)
@@ -1112,7 +1260,7 @@ async def get_instancias_disponibles(
 
 @router.get("/estadisticas")
 async def get_estadisticas_globales(db: AsyncSession = Depends(get_db)):
-    """Obtener estadísticas globales del sistema - VERSIÓN MEJORADA"""
+    """Obtener estadísticas globales del sistema"""
     
     # Estadísticas por año
     stats_anio = await db.execute(
@@ -1482,7 +1630,7 @@ async def get_bloques(db: AsyncSession = Depends(get_db)):
             'codigo': b.codigo,
             'capacidad_teus': b.capacidad_teus,
             'capacidad_bahias': b.capacidad_bahias,
-            'capacidad_original': b.capacidad_original,  # NUEVO
+            'capacidad_original': b.capacidad_original,
             'activo': b.activo
         }
         for b in bloques
@@ -1527,7 +1675,7 @@ async def get_kpis_resumen(
     granularidad: Optional[str] = Query(None, description="bahia o pila"),
     db: AsyncSession = Depends(get_db)
 ):
-    """Obtener resumen de KPIs principales con valores correctos"""
+    """Obtener resumen de KPIs principales"""
     
     # Construir query base
     query = select(

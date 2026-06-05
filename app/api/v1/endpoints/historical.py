@@ -27,7 +27,6 @@ CAPACIDADES_BLOQUES = {
     'T1': 714, 'T2': 714, 'T3': 714, 'T4': 714
 }
 
-# NUEVAS CONSTANTES PARA BAHÍAS
 BAHIAS_TOTALES_BLOQUES = {
     'C1': 33, 'C2': 33, 'C3': 33, 'C4': 33, 'C5': 33,
     'C6': 33, 'C7': 33, 'C8': 33, 'C9': 33,
@@ -871,7 +870,6 @@ async def get_historical_movements(
                     'maximosTeus': int(row.maximos_teus or 0),
                     'promedioContenedores': float(row.promedio_contenedores or 0),
                     'promedioTeus': float(row.promedio_teus or 0),
-                    # NUEVOS CAMPOS AGREGADOS
                     'despejosBloques': despejos_bloques,
                     'despejosPatios': despejos_patios,
                     'bahias': bahias_totales,
@@ -938,7 +936,6 @@ async def get_historical_movements(
                     'maximosTeus': m.maximos_teus,
                     'promedioContenedores': m.promedio_contenedores,
                     'promedioTeus': m.promedio_teus,
-                    # NUEVOS CAMPOS AGREGADOS
                     'despejosBloques': despejos_bloques,
                     'despejosPatios': despejos_patios,
                     'bahias': bahias_totales,

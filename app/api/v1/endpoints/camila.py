@@ -258,7 +258,6 @@ async def _build_single_dashboard(resultado: ResultadoCamila, db: AsyncSession) 
                     "balance_trabajo": _calc_balance_trabajo(metricas_gruas),
                     "cumplimiento_meta": _calc_cumplimiento_meta_gruas(metricas_gruas),
                     
-                    # NUEVAS MÉTRICAS
                     "utilizacion_gruas": {
                         "total": 12,
                         "activas": resultado.total_gruas_utilizadas,
@@ -290,7 +289,6 @@ async def _build_single_dashboard(resultado: ResultadoCamila, db: AsyncSession) 
                 "detalle_gruas": metricas_gruas,
                 "distribucion_trabajo": _get_distribucion_trabajo_gruas(metricas_gruas),
                 
-                # NUEVA VISUALIZACIÓN: Matriz de asignación
                 "matriz_asignacion": await _get_matriz_asignacion_gruas(resultado.id, db)
             },
             
@@ -879,7 +877,7 @@ async def get_filtros_disponibles(
     grans_result = await db.execute(select(distinct(ResultadoCamila.granularidad)).where(and_(*base_filter, ResultadoCamila.granularidad.isnot(None))))
     
     return {
-        "anios": anios,  # NUEVO: Agregar años disponibles
+        "anios": anios,
         "semanas": semanas,
         "dias": list(range(1, 8)),  # Lunes a Domingo
         "turnos": list(range(1, 22)),  # 21 turnos por semana
