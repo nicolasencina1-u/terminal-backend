@@ -1,5 +1,5 @@
 # terminal-backend
-1. Ejecutar `docker compose up -d`
+1. Ejecutar `docker compose up -d` estando en la ruta `terminal-backend/`
 
 2. Automáticamente se ejecuta un código de carga de datos (`scripts/docker-entrypoint.sh`), aunque debido al gran tamaño de datos solo cargará la primera semana.
 La carga de los datos puede tomar horas o aveces incluso fallar, por lo que se recomienda ejecutar `docker compose logs -f backend` en la misma ruta para ver los logs en vivo del backend, mostrando el progreso de carga o errores.
