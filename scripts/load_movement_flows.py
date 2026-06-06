@@ -312,7 +312,7 @@ async def main(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Cargar flujos de movimiento con filtro de años')
-    parser.add_argument('--file', type=str, default="data/historico/data_2022.csv", 
+    parser.add_argument('--file', type=str, default="data/historico/Flujos.csv", 
                        help='Ruta del archivo CSV')
     parser.add_argument('--clear', action='store_true', 
                        help='Limpiar datos existentes antes de cargar')
