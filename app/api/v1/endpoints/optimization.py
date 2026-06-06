@@ -310,6 +310,21 @@ async def get_optimization_dashboard(
             for k in movs_real_semanal[b]:
                 movs_real_semanal[b][k] += stats[k]
 
+    # Calcular totales consolidados para KPIS (Suma de todos los bloques y periodos)
+    total_recv_modelo = sum(b['recepcion'] for b in movs_modelo_semanal.values())
+    total_load_modelo = sum(b['carga'] for b in movs_modelo_semanal.values())
+    total_dsch_modelo = sum(b['descarga'] for b in movs_modelo_semanal.values())
+    total_dlvr_modelo = sum(b['entrega'] for b in movs_modelo_semanal.values())
+    total_operativos_modelo_calc = total_recv_modelo + total_load_modelo + total_dsch_modelo + total_dlvr_modelo
+
+    total_recv_real = sum(b['recepcion'] for b in movs_real_semanal.values())
+    total_load_real = sum(b['carga'] for b in movs_real_semanal.values())
+    total_dsch_real = sum(b['descarga'] for b in movs_real_semanal.values())
+    total_dlvr_real = sum(b['entrega'] for b in movs_real_semanal.values())
+    total_yard_real = sum(b['yard'] for b in movs_real_semanal.values())
+    total_real_calculado = total_recv_real + total_load_real + total_dsch_real + total_dlvr_real + total_yard_real
+    total_operativos_real_calc = total_real_calculado - total_yard_real
+
     response = {
         'metadata': {
             'instancia_id': str(instancia.id),
@@ -331,20 +346,22 @@ async def get_optimization_dashboard(
                 'ganancia': eficiencia_ganancia
             },
             'movimientos': {
-                'total_real': resultados.movimientos_reales_total,
-                'operativos_real': resultados.movimientos_reales_total - resultados.movimientos_yard_real,
-                'operativos_modelo': movimientos_optimizados,
-                'yard_eliminados': resultados.movimientos_yard_real,
-                'optimizados': movimientos_optimizados,
-                'reduccion_absoluta': resultados.movimientos_reduccion,
-                'reduccion_porcentaje': float(resultados.movimientos_reduccion_pct or 0),
+                'total_real': total_real_calculado,
+                'operativos_real': total_operativos_real_calc,
+                'operativos_modelo': total_operativos_modelo_calc,
+                'yard_eliminados': total_yard_real,
+                'optimizados': total_operativos_modelo_calc,
+                'reduccion_absoluta': total_operativos_real_calc - total_operativos_modelo_calc,
+                'reduccion_porcentaje': float((total_operativos_real_calc - total_operativos_modelo_calc) / total_operativos_real_calc * 100) if total_operativos_real_calc > 0 else 0,
                 'detalle': {
-                    'dlvr_real': resultados.movimientos_dlvr_real,
-                    'dlvr_modelo': resultados.movimientos_dlvr_modelo,
-                    'load_real': resultados.movimientos_load_real,
-                    'load_modelo': resultados.movimientos_load_modelo,
-                    'recv_real': resultados.movimientos_recv_real,
-                    'dsch_real': resultados.movimientos_dsch_real
+                    'dlvr_real': total_dlvr_real,
+                    'dlvr_modelo': total_dlvr_modelo,
+                    'load_real': total_load_real,
+                    'load_modelo': total_load_modelo,
+                    'recv_real': total_recv_real,
+                    'recv_modelo': total_recv_modelo,
+                    'dsch_real': total_dsch_real,
+                    'dsch_modelo': total_dsch_modelo
                 }
             },
             'distancias': {
@@ -372,7 +389,7 @@ async def get_optimization_dashboard(
                 'capacidad_total': resultados.capacidad_total_teus
             },
             'carga_trabajo': {
-                'total': movimientos_optimizados,
+                'total': total_operativos_modelo_calc,
                 'maxima': resultados.carga_maxima,
                 'minima': resultados.carga_minima,
                 'variacion': resultados.variacion_carga,
@@ -429,12 +446,12 @@ async def get_optimization_dashboard(
         ],
         'comparacion_resumen': {
             'eliminacion_reubicaciones': {
-                'valor': resultados.movimientos_yard_real,
+                'valor': total_yard_real,
                 'porcentaje': 100
             },
             'reduccion_movimientos_operativos': {
-                'valor': resultados.movimientos_reduccion,
-                'porcentaje': float(resultados.movimientos_reduccion_pct or 0)
+                'valor': total_operativos_real_calc - total_operativos_modelo_calc,
+                'porcentaje': float((total_operativos_real_calc - total_operativos_modelo_calc) / total_operativos_real_calc * 100) if total_operativos_real_calc > 0 else 0
             },
             'mejora_eficiencia': {
                 'valor': eficiencia_ganancia,
